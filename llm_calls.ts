@@ -16,7 +16,7 @@ import { XaiProvider } from "@ai-sdk/xai";
 // Zod validation for message structure
 const MessageSchema = z.object({
     role: z.enum(["system", "user", "assistant"]),
-    content: z.string()
+    content: z.string(),
 });
 
 const ConversationSchema = z.array(MessageSchema);
@@ -92,10 +92,10 @@ export async function ai_sdk_streaming(
     provider_name: eligible_provider
 ): Promise<StreamTextResult<Record<string, CoreTool<any, any>>, never>> {
     new Notice(`Calling ${provider_name[0].toUpperCase() + provider_name.slice(1)}`);
-    
+
     // Validate conversation structure
     const validatedConversation = ConversationSchema.parse(conversation);
-    console.log("AI_SDK_STREAMING - Messages being sent:", JSON.stringify(validatedConversation, null, 2));
+
     const handleError = (event: unknown) => {
         const error = (event as { error: unknown }).error;
         const typedError = error as { errors: Array<{ statusCode: number }> };
@@ -137,10 +137,9 @@ export async function ai_sdk_completion(
     provider_name: eligible_provider
 ): Promise<string> {
     new Notice(`Calling ${provider_name[0].toUpperCase() + provider_name.slice(1)}`);
-    
+
     // Validate conversation structure
     const validatedConversation = ConversationSchema.parse(conversation);
-    console.log("AI_SDK_COMPLETION - Messages being sent:", JSON.stringify(validatedConversation, null, 2));
 
     if (provider_name === "openrouter") {
         const openrouter_provider = provider as OpenRouterProvider;
@@ -170,10 +169,9 @@ export async function ai_sdk_structured<T extends z.ZodType>(
     schema: T
 ): Promise<z.infer<T>> {
     new Notice(`Calling ${provider_name[0].toUpperCase() + provider_name.slice(1)}`);
-    
+
     // Validate conversation structure
     const validatedConversation = ConversationSchema.parse(conversation);
-    console.log("AI_SDK_STRUCTURED - Messages being sent:", JSON.stringify(validatedConversation, null, 2));
 
     if (provider_name === "openrouter") {
         const openrouter_provider = provider as OpenRouterProvider;
