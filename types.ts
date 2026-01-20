@@ -151,6 +151,16 @@ export interface WorkflowPrompt {
     temperature: string;
     prompt: string;
 }
+// Copilot SDK configuration
+export interface CopilotClientConfig {
+    autoStart?: boolean;
+    autoRestart?: boolean;
+}
+
+export interface CopilotSessionConfig {
+    // Configuration for creating a Copilot session
+}
+
 export interface CaretPluginSettings {
     caret_version: string;
     chat_logs_folder: string;
@@ -179,4 +189,7 @@ export interface CaretPluginSettings {
     image_provider: string;
     image_model_options: ImageModelOptions;
     image_provider_dropdown_options: { [key: string]: string };
+
+    github_copilot_enabled: boolean;
+    github_copilot_cli_path?: string;
 }

@@ -569,6 +569,8 @@ export const DEFAULT_SETTINGS: CaretPluginSettings = {
         openai: "OpenAI",
         xai: "xAI Grok",
     },
+    github_copilot_enabled: false,
+    github_copilot_cli_path: undefined,
 };
 
 export default class CaretPlugin extends Plugin {
