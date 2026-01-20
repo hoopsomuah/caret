@@ -37,11 +37,12 @@ export type eligible_provider =
     | "ollama"
     | "openrouter"
     | "custom"
-    | "perplexity";
+    | "perplexity"
+    | "github-copilot";
 
 export type image_provider = OpenAIProvider | XaiProvider;
 
-const refactored_providers = ["openai", "google", "anthropic", "groq", "ollama", "openrouter", "custom", "perplexity"];
+const refactored_providers = ["openai", "google", "anthropic", "groq", "ollama", "openrouter", "custom", "perplexity", "github-copilot"];
 export const isEligibleProvider = (provider: string): provider is eligible_provider => {
     return refactored_providers.includes(provider);
 };
@@ -61,6 +62,8 @@ export function get_provider(plugin: CaretPlugin, provider: eligible_provider): 
             return plugin.openrouter_client;
         case "perplexity":
             return plugin.perplexity_client;
+        case "github-copilot":
+            return plugin.copilot_client;
         case "custom":
             const settings = plugin.settings;
             const current_model = settings.model;
