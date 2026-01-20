@@ -47,6 +47,22 @@ export class CaretSettingTab extends PluginSettingTab {
             this.plugin.saveSettings();
         }
     }
+
+    private async checkCopilotCLI(): Promise<{ installed: boolean; version?: string; error?: string }> {
+        try {
+            const { exec } = require("child_process");
+            const { promisify } = require("util");
+            const execAsync = promisify(exec);
+            
+            // Try custom path first, then default
+            const cliPath = this.plugin.settings.github_copilot_cli_path || "github-copilot-cli";
+            const { stdout } = await execAsync(`${cliPath} --version`);
+            return { installed: true, version: stdout.trim() };
+        } catch (error) {
+            return { installed: false, error: String(error) };
+        }
+    }
+
     api_settings_tab(containerEl: HTMLElement): void {
         // API settings logic here
         const default_llm_providers = DEFAULT_SETTINGS.llm_provider_options;
@@ -321,6 +337,49 @@ export class CaretSettingTab extends PluginSettingTab {
                     });
                 text.inputEl.addClass("caret-hidden-value-unsecure");
             });
+
+        // GitHub Copilot Section
+        containerEl.createEl("h3", { text: "GitHub Copilot" });
+
+        new Setting(containerEl)
+            .setName("Enable GitHub Copilot")
+            .setDesc("Use GitHub Copilot SDK as an LLM provider (requires Copilot CLI installed and authenticated)")
+            .addToggle((toggle) => {
+                toggle.setValue(this.plugin.settings.github_copilot_enabled)
+                    .onChange(async (value: boolean) => {
+                        this.plugin.settings.github_copilot_enabled = value;
+                        await this.plugin.saveSettings();
+                        this.display(); // Refresh to update status
+                    });
+            });
+
+        // Show CLI status when Copilot is enabled
+        if (this.plugin.settings.github_copilot_enabled) {
+            const statusSetting = new Setting(containerEl)
+                .setName("Copilot CLI Status")
+                .setDesc("Checking...");
+            
+            // Check CLI status asynchronously
+            this.checkCopilotCLI().then((status) => {
+                if (status.installed) {
+                    statusSetting.setDesc(`✅ Copilot CLI detected${status.version ? ` (${status.version})` : ""}`);
+                } else {
+                    statusSetting.setDesc("❌ Copilot CLI not found. Install from: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli");
+                }
+            });
+
+            new Setting(containerEl)
+                .setName("Custom CLI Path")
+                .setDesc("Optional: specify a custom path to the Copilot CLI executable")
+                .addText((text) => {
+                    text.setPlaceholder("github-copilot-cli")
+                        .setValue(this.plugin.settings.github_copilot_cli_path || "")
+                        .onChange(async (value: string) => {
+                            this.plugin.settings.github_copilot_cli_path = value || undefined;
+                            await this.plugin.saveSettings();
+                        });
+                });
+        }
 
         new Setting(containerEl)
             .setName("Reload after adding API keys!")

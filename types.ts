@@ -175,6 +175,10 @@ export interface CaretPluginSettings {
     google_api_key: string;
     perplexity_api_key: string;
 
+    // GitHub Copilot settings
+    github_copilot_enabled: boolean;
+    github_copilot_cli_path?: string; // Optional custom path to Copilot CLI
+
     image_model: string;
     image_provider: string;
     image_model_options: ImageModelOptions;

@@ -63,6 +63,8 @@ export const DEFAULT_SETTINGS: CaretPluginSettings = {
     llm_provider: "openai",
     openai_api_key: "",
     groq_api_key: "",
+    github_copilot_enabled: false,
+    github_copilot_cli_path: undefined,
 
     anthropic_api_key: "",
     open_router_key: "",
@@ -531,6 +533,36 @@ export const DEFAULT_SETTINGS: CaretPluginSettings = {
                 streaming: true,
             },
         },
+        "github-copilot": {
+            "gpt-5": {
+                name: "GPT-5 (via Copilot)",
+                context_window: 400000,
+                function_calling: true,
+                vision: true,
+                streaming: true,
+            },
+            "claude-sonnet-4-5": {
+                name: "Claude Sonnet 4.5 (via Copilot)",
+                context_window: 200000,
+                function_calling: true,
+                vision: true,
+                streaming: true,
+            },
+            "o3": {
+                name: "o3 (via Copilot)",
+                context_window: 200000,
+                function_calling: true,
+                vision: true,
+                streaming: true,
+            },
+            "o4-mini": {
+                name: "o4-mini (via Copilot)",
+                context_window: 200000,
+                function_calling: true,
+                vision: true,
+                streaming: true,
+            },
+        },
     },
     provider_dropdown_options: {
         openai: "OpenAI",
@@ -541,6 +573,7 @@ export const DEFAULT_SETTINGS: CaretPluginSettings = {
         custom: "Custom",
         google: "Google Gemini",
         perplexity: "Perplexity",
+        "github-copilot": "GitHub Copilot",
     },
     include_nested_block_refs: true,
     google_api_key: "",
