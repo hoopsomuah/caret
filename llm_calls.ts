@@ -83,7 +83,7 @@ export function get_provider(plugin: CaretPlugin, provider: eligible_provider): 
             return plugin.custom_client;
         default:
             throw new Error(
-                `Invalid provider: ${provider}. Must be one of: openai, google, anthropic, groq, ollama, openrouter, custom`
+                `Invalid provider: ${provider}. Must be one of: ${refactored_providers.join(", ")}`
             );
     }
 }
