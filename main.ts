@@ -3644,8 +3644,11 @@ version: 1
                 if (errors.length > 0) console.warn("Copilot cleanup warnings:", errors);
             } catch (error) {
                 console.error("Copilot stop() failed, attempting forceStop():", error);
-                try { await this.copilot_client.forceStop(); } 
-                catch (forceError) { console.error("forceStop() also failed:", forceError); }
+                try {
+                    await this.copilot_client.forceStop();
+                } catch (forceError) {
+                    console.error("forceStop() also failed:", forceError);
+                }
             }
             this.copilot_client = null;
         }
@@ -3680,8 +3683,11 @@ version: 1
 
     async restartCopilotClient(): Promise<void> {
         if (this.copilot_client) {
-            try { await this.copilot_client.stop(); } 
-            catch (error) { console.error("Error stopping Copilot client:", error); }
+            try {
+                await this.copilot_client.stop();
+            } catch (error) {
+                console.error("Error stopping Copilot client:", error);
+            }
             this.copilot_client = null;
         }
         await this.initCopilotClient();
