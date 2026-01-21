@@ -8,6 +8,8 @@ import {
     ai_sdk_completion,
     ai_sdk_structured,
     ai_sdk_image_gen,
+    copilot_sdk_streaming,
+    copilot_sdk_completion,
 } from "./llm_calls";
 
 // // @ts-ignore
@@ -3256,15 +3258,36 @@ version: 1
                 throw new Error(`Invalid provider: ${provider}`);
             }
 
-            let sdk_provider: sdk_provider = get_provider(this, provider);
-
-            if (this.settings.llm_provider_options[provider][model].streaming) {
-                const stream = await ai_sdk_streaming(sdk_provider, model, conversation, temperature, provider);
+            if (provider === "github-copilot") {
+                if (!this.copilot_client) {
+                    throw new Error("Copilot client not initialized. Enable GitHub Copilot in settings.");
+                }
+                const copilotResult = await copilot_sdk_streaming(
+                    this.copilot_client,
+                    model,
+                    conversation,
+                    local_system_prompt
+                );
                 new_canvas_node.text = "";
-                await this.update_node_content_streaming(new_node_id, stream);
+                try {
+                    for await (const textPart of copilotResult.textStream) {
+                        new_canvas_node.text += textPart;
+                        new_canvas_node.render();
+                    }
+                } finally {
+                    await copilotResult.cleanup();
+                }
             } else {
-                const content = await ai_sdk_completion(sdk_provider, model, conversation, temperature, provider);
-                new_canvas_node.setText(content);
+                let sdk_provider: sdk_provider = get_provider(this, provider);
+
+                if (this.settings.llm_provider_options[provider][model].streaming) {
+                    const stream = await ai_sdk_streaming(sdk_provider, model, conversation, temperature, provider);
+                    new_canvas_node.text = "";
+                    await this.update_node_content_streaming(new_node_id, stream);
+                } else {
+                    const content = await ai_sdk_completion(sdk_provider, model, conversation, temperature, provider);
+                    new_canvas_node.setText(content);
+                }
             }
             if (i === 0) {
                 firstNode = new_canvas_node;
