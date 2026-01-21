@@ -3687,7 +3687,12 @@ version: 1
                 const errors = await this.copilot_client.stop();
                 if (errors.length > 0) console.warn("Copilot cleanup warnings:", errors);
             } catch (error) {
-                console.error("Error stopping Copilot client:", error);
+                console.error("Error stopping Copilot client, attempting forceStop():", error);
+                try {
+                    await this.copilot_client.forceStop();
+                } catch (forceError) {
+                    console.error("forceStop() also failed:", forceError);
+                }
             }
             this.copilot_client = null;
         }
