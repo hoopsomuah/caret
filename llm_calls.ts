@@ -26,7 +26,7 @@ const ConversationSchema = z.array(MessageSchema);
  * Result object from copilot_sdk_streaming().
  * Compatible with Caret's StreamTextResult.textStream consumption pattern.
  */
-interface CopilotStreamResult {
+export interface CopilotStreamResult {
     /** Async iterable of text chunks - matches StreamTextResult.textStream pattern */
     textStream: AsyncIterable<string>;
     /** Optional reasoning stream for models that support chain-of-thought */
