@@ -146,11 +146,12 @@ export type eligible_provider =
     | "ollama"
     | "openrouter"
     | "custom"
-    | "perplexity";
+    | "perplexity"
+    | "github-copilot";
 
 export type image_provider = OpenAIProvider | XaiProvider;
 
-const refactored_providers = ["openai", "google", "anthropic", "groq", "ollama", "openrouter", "custom", "perplexity"];
+const refactored_providers = ["openai", "google", "anthropic", "groq", "ollama", "openrouter", "custom", "perplexity", "github-copilot"];
 export const isEligibleProvider = (provider: string): provider is eligible_provider => {
     return refactored_providers.includes(provider);
 };
@@ -170,6 +171,10 @@ export function get_provider(plugin: CaretPlugin, provider: eligible_provider): 
             return plugin.openrouter_client;
         case "perplexity":
             return plugin.perplexity_client;
+        case "github-copilot":
+            throw new Error(
+                "GitHub Copilot uses a different API pattern. Use copilot_sdk_streaming() or copilot_sdk_completion() directly instead of get_provider()."
+            );
         case "custom":
             const settings = plugin.settings;
             const current_model = settings.model;
@@ -189,7 +194,7 @@ export function get_provider(plugin: CaretPlugin, provider: eligible_provider): 
             return plugin.custom_client;
         default:
             throw new Error(
-                `Invalid provider: ${provider}. Must be one of: openai, google, anthropic, groq, ollama, openrouter, custom`
+                `Invalid provider: ${provider}. Must be one of: ${refactored_providers.join(", ")}`
             );
     }
 }
