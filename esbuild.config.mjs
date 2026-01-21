@@ -11,6 +11,13 @@ if you want to view the source, please visit the github repository of this plugi
 
 const prod = (process.argv[2] === "production");
 
+// Include both unprefixed and node: prefixed versions of built-in modules
+// Some packages (like @github/copilot-sdk) use the node: prefix
+const builtinsWithNodePrefix = [
+	...builtins,
+	...builtins.map(m => `node:${m}`)
+];
+
 const context = await esbuild.context({
 	banner: {
 		js: banner,
@@ -31,7 +38,7 @@ const context = await esbuild.context({
 		"@lezer/common",
 		"@lezer/highlight",
 		"@lezer/lr",
-		...builtins],
+		...builtinsWithNodePrefix],
 	format: "cjs",
 	target: "es2018",
 	logLevel: "info",
