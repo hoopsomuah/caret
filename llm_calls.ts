@@ -12,6 +12,7 @@ import { experimental_generateImage as generateImage } from "ai";
 import { z } from "zod";
 import CaretPlugin from "main";
 import { XaiProvider } from "@ai-sdk/xai";
+import { CopilotClient } from "@github/copilot-sdk";
 
 // Zod validation for message structure
 const MessageSchema = z.object({
@@ -28,7 +29,8 @@ export type sdk_provider =
     | GroqProvider
     | OllamaProvider
     | OpenRouterProvider
-    | OpenAICompatibleProvider;
+    | OpenAICompatibleProvider
+    | CopilotClient;
 export type eligible_provider =
     | "google"
     | "openai"
