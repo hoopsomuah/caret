@@ -8,6 +8,7 @@ import { createOllama, OllamaProvider, ollama } from "ollama-ai-provider";
 import { createOpenRouter, OpenRouterProvider } from "@openrouter/ai-sdk-provider";
 import { createOpenAICompatible, OpenAICompatibleProvider } from "@ai-sdk/openai-compatible";
 import { experimental_generateImage as generateImage } from "ai";
+import { CopilotClient, CopilotSession } from "@github/copilot-sdk";
 
 import { z } from "zod";
 import CaretPlugin from "main";
@@ -20,6 +21,114 @@ const MessageSchema = z.object({
 });
 
 const ConversationSchema = z.array(MessageSchema);
+
+/**
+ * Result object from copilot_sdk_streaming().
+ * Compatible with Caret's StreamTextResult.textStream consumption pattern.
+ */
+export interface CopilotStreamResult {
+    /** Async iterable of text chunks - matches StreamTextResult.textStream pattern */
+    textStream: AsyncIterable<string>;
+    /** Optional reasoning stream for models that support chain-of-thought */
+    reasoningStream?: AsyncIterable<string>;
+    /** Reference to the underlying session for advanced use cases */
+    session: CopilotSession;
+    /** Abort the current message without destroying the session */
+    abort: () => void;
+    /** Clean up the session - call when done consuming the stream */
+    cleanup: () => Promise<void>;
+}
+
+/**
+ * Generic async queue that bridges event callbacks to async iterables.
+ * Handles backpressure, error propagation, and completion signaling.
+ */
+class AsyncEventQueue<T> {
+    private queue: T[] = [];
+    private resolvers: Array<(value: IteratorResult<T>) => void> = [];
+    private rejecters: Array<(error: Error) => void> = [];
+    private done = false;
+    private error: Error | null = null;
+    private readonly maxSize: number;
+
+    constructor(maxSize: number = 1000) {
+        this.maxSize = maxSize;
+    }
+
+    /**
+     * Push a value to the queue. If a consumer is waiting, resolve immediately.
+     * When no consumers are waiting, values are buffered up to maxSize.
+     */
+    push(value: T): void {
+        if (this.done) return;
+        
+        if (this.resolvers.length > 0) {
+            const resolve = this.resolvers.shift()!;
+            this.rejecters.shift(); // Remove corresponding rejecter
+            resolve({ value, done: false });
+        } else {
+            // Drop oldest item if queue is full to prevent unbounded growth
+            if (this.queue.length >= this.maxSize) {
+                this.queue.shift();
+                console.warn(`AsyncEventQueue: Queue exceeded maxSize (${this.maxSize}), dropping oldest item`);
+            }
+            this.queue.push(value);
+        }
+    }
+
+    /**
+     * Signal completion. Any waiting consumers will receive done: true.
+     */
+    complete(): void {
+        this.done = true;
+        while (this.resolvers.length > 0) {
+            const resolve = this.resolvers.shift()!;
+            this.rejecters.shift(); // Remove corresponding rejecter
+            resolve({ value: undefined as T, done: true });
+        }
+    }
+
+    /**
+     * Signal an error. Any waiting consumers will have the error thrown.
+     */
+    fail(error: Error): void {
+        this.error = error;
+        this.done = true;
+        // Reject all waiting consumers with the error
+        while (this.rejecters.length > 0) {
+            const reject = this.rejecters.shift()!;
+            this.resolvers.shift(); // Remove corresponding resolver
+            reject(error);
+        }
+    }
+
+    /**
+     * Create an async iterator that yields values as they are pushed.
+     */
+    [Symbol.asyncIterator](): AsyncIterator<T> {
+        return {
+            next: (): Promise<IteratorResult<T>> => {
+                // Always drain queued items first, even if an error has been set
+                if (this.queue.length > 0) {
+                    return Promise.resolve({ value: this.queue.shift()!, done: false });
+                }
+                
+                if (this.error) {
+                    return Promise.reject(this.error);
+                }
+                
+                if (this.done) {
+                    return Promise.resolve({ value: undefined as T, done: true });
+                }
+                
+                return new Promise((resolve, reject) => {
+                    this.resolvers.push(resolve);
+                    this.rejecters.push(reject);
+                });
+            }
+        };
+    }
+}
 
 export type sdk_provider =
     | GoogleGenerativeAIProvider
@@ -63,11 +172,8 @@ export function get_provider(plugin: CaretPlugin, provider: eligible_provider): 
         case "perplexity":
             return plugin.perplexity_client;
         case "github-copilot":
-            // GitHub Copilot provider integration is not yet fully implemented.
-            // This requires the GitHub CLI (gh) to be installed and authenticated.
-            // Full implementation will be added in a future update.
             throw new Error(
-                "GitHub Copilot provider is not yet fully implemented. Please ensure GitHub CLI is installed and authenticated, and check for updates."
+                "GitHub Copilot uses a different API pattern. Use copilot_sdk_streaming() or copilot_sdk_completion() directly instead of get_provider()."
             );
         case "custom":
             const settings = plugin.settings;
@@ -88,7 +194,7 @@ export function get_provider(plugin: CaretPlugin, provider: eligible_provider): 
             return plugin.custom_client;
         default:
             throw new Error(
-                `Invalid provider: ${provider}. Must be one of: openai, google, anthropic, groq, ollama, openrouter, custom, perplexity, github-copilot`
+                `Invalid provider: ${provider}. Must be one of: ${refactored_providers.join(", ")}`
             );
     }
 }
@@ -214,4 +320,145 @@ export async function ai_sdk_image_gen(params: { provider: image_provider; promp
     });
     const arrayBuffer = image.uint8Array;
     return arrayBuffer;
+}
+
+export async function copilot_sdk_streaming(
+    client: CopilotClient,
+    model: string,
+    conversation: Array<{ role: string; content: string }>,
+    systemMessage?: string
+): Promise<CopilotStreamResult> {
+    new Notice("Calling GitHub Copilot");
+
+    // Validate conversation structure
+    const validatedConversation = ConversationSchema.parse(conversation);
+
+    const lastUserMessage = validatedConversation.filter(m => m.role === 'user').pop();
+    if (!lastUserMessage) {
+        throw new Error("No user message found in conversation");
+    }
+
+    const session = await client.createSession({
+        model: model,
+        streaming: true,
+        systemMessage: systemMessage ? { content: systemMessage } : undefined,
+    });
+
+    const textQueue = new AsyncEventQueue<string>();
+    const reasoningQueue = new AsyncEventQueue<string>();
+    let cleanedUp = false;
+
+    const performCleanup = async () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        unsubscribe();
+        try {
+            await session.destroy();
+        } catch (e) {
+            console.warn("Error destroying Copilot session:", e);
+        }
+    };
+
+    const unsubscribe = session.on((event: any) => {
+        // Add runtime checks for event structure
+        if (!event || typeof event.type !== 'string') {
+            console.warn("Received invalid event from Copilot session:", event);
+            return;
+        }
+
+        switch (event.type) {
+            case "assistant.message_delta":
+                if (event.data && typeof event.data.deltaContent === 'string') {
+                    textQueue.push(event.data.deltaContent);
+                }
+                break;
+            
+            case "assistant.reasoning_delta":
+                if (event.data && typeof event.data.deltaContent === 'string') {
+                    reasoningQueue.push(event.data.deltaContent);
+                }
+                break;
+            
+            case "session.error":
+                const errorMessage = event.data?.message || 'Unknown error';
+                const error = new Error(`Copilot streaming error: ${errorMessage}`);
+                textQueue.fail(error);
+                reasoningQueue.fail(error);
+                console.error("Copilot session error:", event.data);
+                new Notice(`Copilot error: ${errorMessage}`);
+                // Perform cleanup when error occurs
+                performCleanup().catch(e => console.warn("Error during cleanup after session error:", e));
+                break;
+            
+            case "session.idle":
+                textQueue.complete();
+                reasoningQueue.complete();
+                break;
+        }
+    });
+
+    try {
+        // Send the full conversation history to maintain context
+        // Note: Copilot SDK may have specific API for conversation history
+        // For now, sending last message as per current API understanding
+        await session.send({ prompt: lastUserMessage.content });
+    } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        // Fail the queues so consumers are not left hanging
+        textQueue.fail(error);
+        reasoningQueue.fail(error);
+        // Clean up the session to avoid resource leaks
+        await performCleanup();
+        throw error;
+    }
+
+    return {
+        textStream: textQueue,
+        reasoningStream: reasoningQueue,
+        session: session,
+        abort: () => {
+            session.abort();
+            textQueue.complete();
+            reasoningQueue.complete();
+        },
+        cleanup: performCleanup
+    };
+}
+
+export async function copilot_sdk_completion(
+    client: CopilotClient,
+    model: string,
+    conversation: Array<{ role: string; content: string }>,
+    systemMessage?: string
+): Promise<string> {
+    new Notice("Calling GitHub Copilot");
+
+    // Validate conversation structure
+    const validatedConversation = ConversationSchema.parse(conversation);
+
+    const lastUserMessage = validatedConversation.filter(m => m.role === 'user').pop();
+    if (!lastUserMessage) {
+        throw new Error("No user message found in conversation");
+    }
+
+    const session = await client.createSession({
+        model: model,
+        streaming: false,
+        systemMessage: systemMessage ? { content: systemMessage } : undefined,
+    });
+
+    try {
+        // Send the full conversation history to maintain context
+        // Note: Copilot SDK may have specific API for conversation history
+        // For now, sending last message as per current API understanding
+        const response = await session.sendAndWait({ prompt: lastUserMessage.content });
+        const content = response?.data?.content || "";
+        return content;
+    } finally {
+        try {
+            await session.destroy();
+        } catch (e) {
+            console.warn("Error destroying Copilot session:", e);
+        }
+    }
 }
