@@ -55,7 +55,12 @@ export class CaretSettingTab extends PluginSettingTab {
             const execAsync = promisify(exec);
 
             const cliPath = this.plugin.settings.github_copilot_cli_path || "github-copilot-cli";
-            const { stdout } = await execAsync(`${cliPath} --version`);
+            
+            // Sanitize the CLI path to prevent command injection
+            // Only allow alphanumeric, hyphens, underscores, dots, forward slashes, and backslashes
+            const sanitizedPath = cliPath.replace(/[^a-zA-Z0-9\-_./\\]/g, "");
+            
+            const { stdout } = await execAsync(`"${sanitizedPath}" --version`);
             return { installed: true, version: stdout.trim() };
         } catch (error) {
             return { installed: false, error: String(error) };
