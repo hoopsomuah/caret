@@ -3755,7 +3755,6 @@ version: 1
         try {
             const { CopilotClient } = await import("@github/copilot-sdk");
             this.copilot_client = new CopilotClient({
-                autoStart: true,
                 autoRestart: true,
             });
             await this.copilot_client.start();
