@@ -1,5 +1,5 @@
 import { streamText, StreamTextResult, CoreTool, generateText, generateObject } from "ai";
-import { ai_sdk_streaming, isEligibleProvider, sdk_provider, get_provider, ai_sdk_completion } from "../llm_calls";
+import { ai_sdk_streaming, isEligibleProvider, sdk_provider, get_provider, ai_sdk_completion, copilot_sdk_completion } from "../llm_calls";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { ConvertTextToNoteModal } from "../modals/convertTextToNoteModal";
@@ -279,8 +279,21 @@ Respond in plain text with no formatting.
             throw new Error(`Invalid provider: ${provider}`);
         }
 
-        let sdk_provider: sdk_provider = get_provider(this.plugin, provider);
-        const content = await ai_sdk_completion(sdk_provider, model, conversation, temperature, provider);
+        let content: string;
+        if (provider === "github-copilot") {
+            if (!this.plugin.copilot_client) {
+                // Skip auto-naming if Copilot not available
+                return;
+            }
+            content = await copilot_sdk_completion(
+                this.plugin.copilot_client,
+                model,
+                conversation
+            );
+        } else {
+            let sdk_provider: sdk_provider = get_provider(this.plugin, provider);
+            content = await ai_sdk_completion(sdk_provider, model, conversation, temperature, provider);
+        }
 
         const path = new_file.path;
         const newPath = `${path.substring(0, path.lastIndexOf("/"))}/${content}.md`;

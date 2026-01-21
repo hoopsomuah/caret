@@ -1,5 +1,5 @@
 import { streamText, StreamTextResult, CoreTool, generateText, generateObject } from "ai";
-import { ai_sdk_streaming, isEligibleProvider, sdk_provider, get_provider, ai_sdk_completion } from "../llm_calls";
+import { ai_sdk_streaming, isEligibleProvider, sdk_provider, get_provider, ai_sdk_completion, copilot_sdk_streaming } from "../llm_calls";
 import React, { useState, useEffect, useImperativeHandle, forwardRef, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -213,20 +213,46 @@ const ChatComponent = forwardRef<
             throw new Error(`Invalid provider: ${provider}`);
         }
 
-        let sdk_provider: sdk_provider = get_provider(plugin, provider);
-
-        if (plugin.settings.llm_provider_options[plugin.settings.llm_provider][plugin.settings.model].streaming) {
-            const stream = await ai_sdk_streaming(sdk_provider, model, valid_conversation, temperature, provider);
-
+        if (provider === "github-copilot") {
+            if (!plugin.copilot_client) {
+                throw new Error("Copilot client not initialized. Enable GitHub Copilot in settings.");
+            }
+            const copilotResult = await copilot_sdk_streaming(
+                plugin.copilot_client,
+                model,
+                valid_conversation,
+                plugin.settings.system_prompt
+            );
             setConversation((prev) => [...prev, { content: "", role: "assistant" }]);
-            await streamMessage(stream);
+            try {
+                for await (const textPart of copilotResult.textStream) {
+                    setConversation((prev) => {
+                        const updated = [...prev];
+                        updated[updated.length - 1].content += textPart;
+                        return updated;
+                    });
+                }
+            } finally {
+                await copilotResult.cleanup();
+            }
             setIsGenerating(false);
             handleSave();
         } else {
-            const content = await ai_sdk_completion(sdk_provider, model, valid_conversation, temperature, provider);
-            setConversation((prev) => [...prev, { content, role: "assistant" }]);
-            setIsGenerating(false);
-            handleSave();
+            let sdk_provider: sdk_provider = get_provider(plugin, provider);
+
+            if (plugin.settings.llm_provider_options[plugin.settings.llm_provider][plugin.settings.model].streaming) {
+                const stream = await ai_sdk_streaming(sdk_provider, model, valid_conversation, temperature, provider);
+
+                setConversation((prev) => [...prev, { content: "", role: "assistant" }]);
+                await streamMessage(stream);
+                setIsGenerating(false);
+                handleSave();
+            } else {
+                const content = await ai_sdk_completion(sdk_provider, model, valid_conversation, temperature, provider);
+                setConversation((prev) => [...prev, { content, role: "assistant" }]);
+                setIsGenerating(false);
+                handleSave();
+            }
         }
     };
 
