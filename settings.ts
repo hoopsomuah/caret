@@ -25,6 +25,10 @@ type ModelDropDownSettings = {
 
 import { Models, CustomModels, LLMProviderOptions } from "./types";
 import CaretPlugin, { DEFAULT_SETTINGS } from "./main";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 export class CaretSettingTab extends PluginSettingTab {
     plugin: CaretPlugin;
@@ -48,18 +52,24 @@ export class CaretSettingTab extends PluginSettingTab {
         }
     }
 
-    private async checkCopilotCLI(): Promise<{ installed: boolean; version?: string; error?: string }> {
+    private async checkGitHubCLI(): Promise<{ installed: boolean; authenticated: boolean; version?: string; error?: string }> {
         try {
-            const { exec } = require("child_process");
-            const { promisify } = require("util");
-            const execAsync = promisify(exec);
+            // Check for gh CLI - GitHub Copilot uses the GitHub CLI with the Copilot extension
+            const ghPath = this.plugin.settings.github_copilot_cli_path || "gh";
             
-            // Try custom path first, then default
-            const cliPath = this.plugin.settings.github_copilot_cli_path || "github-copilot-cli";
-            const { stdout } = await execAsync(`${cliPath} --version`);
-            return { installed: true, version: stdout.trim() };
+            // Check if gh is installed and get version
+            const { stdout: versionOutput } = await execFileAsync(ghPath, ["--version"]);
+            const version = versionOutput.trim().split("\n")[0];
+            
+            // Check authentication status
+            try {
+                await execFileAsync(ghPath, ["auth", "status"]);
+                return { installed: true, authenticated: true, version };
+            } catch (authError) {
+                return { installed: true, authenticated: false, version, error: "Not authenticated with GitHub CLI" };
+            }
         } catch (error) {
-            return { installed: false, error: String(error) };
+            return { installed: false, authenticated: false, error: String(error) };
         }
     }
 
@@ -343,7 +353,7 @@ export class CaretSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName("Enable GitHub Copilot")
-            .setDesc("Use GitHub Copilot SDK as an LLM provider (requires Copilot CLI installed and authenticated)")
+            .setDesc("Use GitHub Copilot SDK as an LLM provider (requires GitHub CLI installed and authenticated)")
             .addToggle((toggle) => {
                 toggle.setValue(this.plugin.settings.github_copilot_enabled)
                     .onChange(async (value: boolean) => {
@@ -356,23 +366,31 @@ export class CaretSettingTab extends PluginSettingTab {
         // Show CLI status when Copilot is enabled
         if (this.plugin.settings.github_copilot_enabled) {
             const statusSetting = new Setting(containerEl)
-                .setName("Copilot CLI Status")
+                .setName("GitHub CLI Status")
                 .setDesc("Checking...");
             
             // Check CLI status asynchronously
-            this.checkCopilotCLI().then((status) => {
-                if (status.installed) {
-                    statusSetting.setDesc(`✅ Copilot CLI detected${status.version ? ` (${status.version})` : ""}`);
-                } else {
-                    statusSetting.setDesc("❌ Copilot CLI not found. Install from: https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli");
-                }
-            });
+            this.checkGitHubCLI()
+                .then((status) => {
+                    if (status.installed && status.authenticated) {
+                        statusSetting.setDesc(`GitHub CLI detected and authenticated${status.version ? ` (${status.version})` : ""}`);
+                    } else if (status.installed && !status.authenticated) {
+                        statusSetting.setDesc(`GitHub CLI detected but not authenticated. Run 'gh auth login' to authenticate.${status.version ? ` (${status.version})` : ""}`);
+                    } else {
+                        statusSetting.setDesc("GitHub CLI not found. Install from: https://cli.github.com/");
+                    }
+                })
+                .catch((error) => {
+                    console.error("Error checking GitHub CLI status:", error);
+                    statusSetting.setDesc("Error checking GitHub CLI status. See console for details.");
+                    new Notice("Error checking GitHub CLI status. See console for details.");
+                });
 
             new Setting(containerEl)
                 .setName("Custom CLI Path")
-                .setDesc("Optional: specify a custom path to the Copilot CLI executable")
+                .setDesc("Optional: specify a custom path to the GitHub CLI (gh) executable")
                 .addText((text) => {
-                    text.setPlaceholder("github-copilot-cli")
+                    text.setPlaceholder("gh")
                         .setValue(this.plugin.settings.github_copilot_cli_path || "")
                         .onChange(async (value: string) => {
                             this.plugin.settings.github_copilot_cli_path = value || undefined;
