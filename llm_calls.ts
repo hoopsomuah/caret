@@ -46,19 +46,32 @@ export interface CopilotStreamResult {
 class AsyncEventQueue<T> {
     private queue: T[] = [];
     private resolvers: Array<(value: IteratorResult<T>) => void> = [];
+    private rejecters: Array<(error: Error) => void> = [];
     private done = false;
     private error: Error | null = null;
+    private readonly maxSize: number;
+
+    constructor(maxSize: number = 1000) {
+        this.maxSize = maxSize;
+    }
 
     /**
      * Push a value to the queue. If a consumer is waiting, resolve immediately.
+     * When no consumers are waiting, values are buffered up to maxSize.
      */
     push(value: T): void {
         if (this.done) return;
         
         if (this.resolvers.length > 0) {
             const resolve = this.resolvers.shift()!;
+            this.rejecters.shift(); // Remove corresponding rejecter
             resolve({ value, done: false });
         } else {
+            // Drop oldest item if queue is full to prevent unbounded growth
+            if (this.queue.length >= this.maxSize) {
+                this.queue.shift();
+                console.warn(`AsyncEventQueue: Queue exceeded maxSize (${this.maxSize}), dropping oldest item`);
+            }
             this.queue.push(value);
         }
     }
@@ -70,6 +83,7 @@ class AsyncEventQueue<T> {
         this.done = true;
         while (this.resolvers.length > 0) {
             const resolve = this.resolvers.shift()!;
+            this.rejecters.shift(); // Remove corresponding rejecter
             resolve({ value: undefined as T, done: true });
         }
     }
@@ -80,9 +94,11 @@ class AsyncEventQueue<T> {
     fail(error: Error): void {
         this.error = error;
         this.done = true;
-        while (this.resolvers.length > 0) {
-            const resolve = this.resolvers.shift()!;
-            resolve({ value: undefined as T, done: true });
+        // Reject all waiting consumers with the error
+        while (this.rejecters.length > 0) {
+            const reject = this.rejecters.shift()!;
+            this.resolvers.shift(); // Remove corresponding resolver
+            reject(error);
         }
     }
 
@@ -92,20 +108,22 @@ class AsyncEventQueue<T> {
     [Symbol.asyncIterator](): AsyncIterator<T> {
         return {
             next: (): Promise<IteratorResult<T>> => {
-                if (this.error) {
-                    return Promise.reject(this.error);
-                }
-                
+                // Always drain queued items first, even if an error has been set
                 if (this.queue.length > 0) {
                     return Promise.resolve({ value: this.queue.shift()!, done: false });
+                }
+                
+                if (this.error) {
+                    return Promise.reject(this.error);
                 }
                 
                 if (this.done) {
                     return Promise.resolve({ value: undefined as T, done: true });
                 }
                 
-                return new Promise((resolve) => {
+                return new Promise((resolve, reject) => {
                     this.resolvers.push(resolve);
+                    this.rejecters.push(reject);
                 });
             }
         };
@@ -307,7 +325,10 @@ export async function copilot_sdk_streaming(
 ): Promise<CopilotStreamResult> {
     new Notice("Calling GitHub Copilot");
 
-    const lastUserMessage = conversation.filter(m => m.role === 'user').pop();
+    // Validate conversation structure
+    const validatedConversation = ConversationSchema.parse(conversation);
+
+    const lastUserMessage = validatedConversation.filter(m => m.role === 'user').pop();
     if (!lastUserMessage) {
         throw new Error("No user message found in conversation");
     }
@@ -320,23 +341,48 @@ export async function copilot_sdk_streaming(
 
     const textQueue = new AsyncEventQueue<string>();
     const reasoningQueue = new AsyncEventQueue<string>();
+    let cleanedUp = false;
+
+    const performCleanup = async () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        unsubscribe();
+        try {
+            await session.destroy();
+        } catch (e) {
+            console.warn("Error destroying Copilot session:", e);
+        }
+    };
 
     const unsubscribe = session.on((event: any) => {
+        // Add runtime checks for event structure
+        if (!event || typeof event.type !== 'string') {
+            console.warn("Received invalid event from Copilot session:", event);
+            return;
+        }
+
         switch (event.type) {
             case "assistant.message_delta":
-                textQueue.push(event.data.deltaContent);
+                if (event.data && typeof event.data.deltaContent === 'string') {
+                    textQueue.push(event.data.deltaContent);
+                }
                 break;
             
             case "assistant.reasoning_delta":
-                reasoningQueue.push(event.data.deltaContent);
+                if (event.data && typeof event.data.deltaContent === 'string') {
+                    reasoningQueue.push(event.data.deltaContent);
+                }
                 break;
             
             case "session.error":
-                const error = new Error(`Copilot streaming error: ${event.data.message}`);
+                const errorMessage = event.data?.message || 'Unknown error';
+                const error = new Error(`Copilot streaming error: ${errorMessage}`);
                 textQueue.fail(error);
                 reasoningQueue.fail(error);
                 console.error("Copilot session error:", event.data);
-                new Notice(`Copilot error: ${event.data.message}`);
+                new Notice(`Copilot error: ${errorMessage}`);
+                // Perform cleanup when error occurs
+                performCleanup().catch(e => console.warn("Error during cleanup after session error:", e));
                 break;
             
             case "session.idle":
@@ -346,7 +392,20 @@ export async function copilot_sdk_streaming(
         }
     });
 
-    await session.send({ prompt: lastUserMessage.content });
+    try {
+        // Send the full conversation history to maintain context
+        // Note: Copilot SDK may have specific API for conversation history
+        // For now, sending last message as per current API understanding
+        await session.send({ prompt: lastUserMessage.content });
+    } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        // Fail the queues so consumers are not left hanging
+        textQueue.fail(error);
+        reasoningQueue.fail(error);
+        // Clean up the session to avoid resource leaks
+        await performCleanup();
+        throw error;
+    }
 
     return {
         textStream: textQueue,
@@ -357,14 +416,7 @@ export async function copilot_sdk_streaming(
             textQueue.complete();
             reasoningQueue.complete();
         },
-        cleanup: async () => {
-            unsubscribe();
-            try {
-                await session.destroy();
-            } catch (e) {
-                console.warn("Error destroying Copilot session:", e);
-            }
-        }
+        cleanup: performCleanup
     };
 }
 
@@ -376,7 +428,10 @@ export async function copilot_sdk_completion(
 ): Promise<string> {
     new Notice("Calling GitHub Copilot");
 
-    const lastUserMessage = conversation.filter(m => m.role === 'user').pop();
+    // Validate conversation structure
+    const validatedConversation = ConversationSchema.parse(conversation);
+
+    const lastUserMessage = validatedConversation.filter(m => m.role === 'user').pop();
     if (!lastUserMessage) {
         throw new Error("No user message found in conversation");
     }
@@ -388,6 +443,9 @@ export async function copilot_sdk_completion(
     });
 
     try {
+        // Send the full conversation history to maintain context
+        // Note: Copilot SDK may have specific API for conversation history
+        // For now, sending last message as per current API understanding
         const response = await session.sendAndWait({ prompt: lastUserMessage.content });
         const content = response?.data?.content || "";
         return content;
