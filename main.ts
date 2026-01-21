@@ -52,6 +52,7 @@ import { createOllama, OllamaProvider } from "ollama-ai-provider";
 import { createOpenRouter, OpenRouterProvider } from "@openrouter/ai-sdk-provider";
 import { createOpenAICompatible, OpenAICompatibleProvider } from "@ai-sdk/openai-compatible";
 import { createXai, xai, XaiProvider } from "@ai-sdk/xai";
+import type { CopilotClient } from "@github/copilot-sdk";
 
 export const DEFAULT_SETTINGS: CaretPluginSettings = {
     caret_version: "0.2.80",
@@ -589,6 +590,7 @@ export default class CaretPlugin extends Plugin {
     custom_client: OpenAICompatibleProvider | undefined | null;
     perplexity_client: OpenAICompatibleProvider;
     xai_client: XaiProvider;
+    copilot_client: CopilotClient | null = null;
 
     async onload() {
         // Initalize extra icons
@@ -645,6 +647,9 @@ export default class CaretPlugin extends Plugin {
                 apiKey: this.settings.xai_api_key,
             });
         }
+
+        // Initialize Copilot client
+        await this.initCopilotClient();
 
         // SEt up Ollama
         this.ollama_client = createOllama();
@@ -3632,10 +3637,54 @@ version: 1
         });
     }
 
-    onunload() {}
+    async onunload() {
+        if (this.copilot_client) {
+            try {
+                const errors = await this.copilot_client.stop();
+                if (errors.length > 0) console.warn("Copilot cleanup warnings:", errors);
+            } catch (error) {
+                console.error("Copilot stop() failed, attempting forceStop():", error);
+                try { await this.copilot_client.forceStop(); } 
+                catch (forceError) { console.error("forceStop() also failed:", forceError); }
+            }
+            this.copilot_client = null;
+        }
+    }
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    }
+
+    private async initCopilotClient(): Promise<void> {
+        if (!this.settings.github_copilot_enabled) return;
+        
+        try {
+            const { CopilotClient } = await import("@github/copilot-sdk");
+            this.copilot_client = new CopilotClient({ autoStart: true, autoRestart: true });
+            await this.copilot_client.start();
+            console.log("Copilot client started successfully");
+        } catch (error) {
+            if (error instanceof Error) {
+                if (error.message.includes("ENOENT") || error.message.includes("not found")) {
+                    new Notice("GitHub Copilot CLI not found. Install it to use Copilot provider.");
+                } else if (error.message.includes("timeout")) {
+                    new Notice("Copilot CLI took too long to start. Try restarting Obsidian.");
+                } else {
+                    new Notice("Copilot initialization failed. Check console for details.");
+                }
+            }
+            console.error("Copilot client initialization failed:", error);
+            this.copilot_client = null;
+        }
+    }
+
+    async restartCopilotClient(): Promise<void> {
+        if (this.copilot_client) {
+            try { await this.copilot_client.stop(); } 
+            catch (error) { console.error("Error stopping Copilot client:", error); }
+            this.copilot_client = null;
+        }
+        await this.initCopilotClient();
     }
 
     async saveSettings() {
