@@ -3637,20 +3637,23 @@ version: 1
         });
     }
 
-    async onunload() {
+    onunload() {
         if (this.copilot_client) {
-            try {
-                const errors = await this.copilot_client.stop();
-                if (errors.length > 0) console.warn("Copilot cleanup warnings:", errors);
-            } catch (error) {
-                console.error("Copilot stop() failed, attempting forceStop():", error);
-                try {
-                    await this.copilot_client.forceStop();
-                } catch (forceError) {
-                    console.error("forceStop() also failed:", forceError);
-                }
-            }
+            const client = this.copilot_client;
             this.copilot_client = null;
+            client.stop().then((errors: Error[]) => {
+                if (errors.length > 0) {
+                    console.warn("Copilot cleanup warnings:", errors);
+                    client.forceStop().catch((forceError: unknown) => {
+                        console.error("forceStop() after cleanup warnings failed:", forceError);
+                    });
+                }
+            }).catch((error: unknown) => {
+                console.error("Copilot stop() failed, attempting forceStop():", error);
+                client.forceStop().catch((forceError: unknown) => {
+                    console.error("forceStop() also failed:", forceError);
+                });
+            });
         }
     }
 
@@ -3685,7 +3688,14 @@ version: 1
         if (this.copilot_client) {
             try {
                 const errors = await this.copilot_client.stop();
-                if (errors.length > 0) console.warn("Copilot cleanup warnings:", errors);
+                if (errors.length > 0) {
+                    console.warn("Copilot cleanup warnings:", errors);
+                    try {
+                        await this.copilot_client.forceStop();
+                    } catch (forceError) {
+                        console.error("forceStop() after cleanup warnings failed:", forceError);
+                    }
+                }
             } catch (error) {
                 console.error("Error stopping Copilot client, attempting forceStop():", error);
                 try {
