@@ -13,7 +13,6 @@ import { CopilotClient, CopilotSession } from "@github/copilot-sdk";
 import { z } from "zod";
 import CaretPlugin from "main";
 import { XaiProvider } from "@ai-sdk/xai";
-import { CopilotClient } from "@github/copilot-sdk";
 
 // Zod validation for message structure
 const MessageSchema = z.object({
@@ -138,8 +137,7 @@ export type sdk_provider =
     | GroqProvider
     | OllamaProvider
     | OpenRouterProvider
-    | OpenAICompatibleProvider
-    | CopilotClient;
+    | OpenAICompatibleProvider;
 export type eligible_provider =
     | "google"
     | "openai"
@@ -174,7 +172,9 @@ export function get_provider(plugin: CaretPlugin, provider: eligible_provider): 
         case "perplexity":
             return plugin.perplexity_client;
         case "github-copilot":
-            return plugin.copilot_client;
+            throw new Error(
+                "GitHub Copilot uses a different API pattern. Use copilot_sdk_streaming() or copilot_sdk_completion() directly instead of get_provider()."
+            );
         case "custom":
             const settings = plugin.settings;
             const current_model = settings.model;
