@@ -449,3 +449,16 @@
     appearance: number-input;
     -webkit-appearance: number-input;
 }
+
+/* Copilot status indicators */
+.caret-status-success {
+    color: var(--text-success);
+}
+
+.caret-status-warning {
+    color: var(--text-warning);
+}
+
+.caret-status-error {
+    color: var(--text-error);
+}
