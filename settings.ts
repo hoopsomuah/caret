@@ -25,6 +25,10 @@ type ModelDropDownSettings = {
 
 import { Models, CustomModels, LLMProviderOptions } from "./types";
 import CaretPlugin, { DEFAULT_SETTINGS } from "./main";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 export class CaretSettingTab extends PluginSettingTab {
     plugin: CaretPlugin;
@@ -47,6 +51,28 @@ export class CaretSettingTab extends PluginSettingTab {
             this.plugin.saveSettings();
         }
     }
+
+    private async checkGitHubCLI(): Promise<{ installed: boolean; authenticated: boolean; version?: string; error?: string }> {
+        try {
+            // Check for gh CLI - GitHub Copilot uses the GitHub CLI with the Copilot extension
+            const ghPath = this.plugin.settings.github_copilot_cli_path || "gh";
+            
+            // Check if gh is installed and get version
+            const { stdout: versionOutput } = await execFileAsync(ghPath, ["--version"]);
+            const version = versionOutput.trim().split("\n")[0];
+            
+            // Check authentication status
+            try {
+                await execFileAsync(ghPath, ["auth", "status"]);
+                return { installed: true, authenticated: true, version };
+            } catch (authError) {
+                return { installed: true, authenticated: false, version, error: "Not authenticated with GitHub CLI" };
+            }
+        } catch (error) {
+            return { installed: false, authenticated: false, error: String(error) };
+        }
+    }
+
     api_settings_tab(containerEl: HTMLElement): void {
         // API settings logic here
         const default_llm_providers = DEFAULT_SETTINGS.llm_provider_options;
@@ -321,6 +347,53 @@ export class CaretSettingTab extends PluginSettingTab {
                     });
                 text.inputEl.addClass("caret-hidden-value-unsecure");
             });
+
+        // GitHub Copilot Section
+        containerEl.createEl("h3", { text: "GitHub Copilot" });
+
+        new Setting(containerEl)
+            .setName("Enable GitHub Copilot")
+            .setDesc("Use GitHub Copilot SDK as an LLM provider (requires GitHub CLI installed and authenticated)")
+            .addToggle((toggle) => {
+                toggle.setValue(this.plugin.settings.github_copilot_enabled).onChange(async (value: boolean) => {
+                    this.plugin.settings.github_copilot_enabled = value;
+                    await this.plugin.saveSettings();
+                    this.display();
+                });
+            });
+
+        // Show CLI status when Copilot is enabled
+        if (this.plugin.settings.github_copilot_enabled) {
+            const statusSetting = new Setting(containerEl).setName("GitHub CLI Status").setDesc("Checking...");
+
+            this.checkGitHubCLI()
+                .then((status) => {
+                    if (status.installed && status.authenticated) {
+                        statusSetting.setDesc(`GitHub CLI detected and authenticated${status.version ? ` (${status.version})` : ""}`);
+                    } else if (status.installed && !status.authenticated) {
+                        statusSetting.setDesc(`GitHub CLI detected but not authenticated. Run 'gh auth login' to authenticate.${status.version ? ` (${status.version})` : ""}`);
+                    } else {
+                        statusSetting.setDesc("GitHub CLI not found. Install from: https://cli.github.com/");
+                    }
+                })
+                .catch((error) => {
+                    console.error("Error checking GitHub CLI status:", error);
+                    statusSetting.setDesc("Error checking GitHub CLI status. See console for details.");
+                    new Notice("Error checking GitHub CLI status. See console for details.");
+                });
+
+            new Setting(containerEl)
+                .setName("Custom CLI Path")
+                .setDesc("Optional: specify a custom path to the GitHub CLI (gh) executable")
+                .addText((text) => {
+                    text.setPlaceholder("gh")
+                        .setValue(this.plugin.settings.github_copilot_cli_path || "")
+                        .onChange(async (value: string) => {
+                            this.plugin.settings.github_copilot_cli_path = value || undefined;
+                            await this.plugin.saveSettings();
+                        });
+                });
+        }
 
         new Setting(containerEl)
             .setName("Reload after adding API keys!")
