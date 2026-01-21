@@ -364,6 +364,10 @@ export class CaretSettingTab extends PluginSettingTab {
                     statusEl.setText("❌ GitHub CLI not found");
                     statusEl.addClass("caret-status-error");
                 }
+            }).catch((error) => {
+                console.error("Error checking GitHub CLI status:", error);
+                statusEl.setText("❌ Error checking GitHub CLI status");
+                statusEl.addClass("caret-status-error");
             });
 
             // Setup Instructions
