@@ -14,6 +14,44 @@ import { z } from "zod";
 import CaretPlugin from "main";
 import { XaiProvider } from "@ai-sdk/xai";
 
+/**
+ * Custom error class for Copilot-specific errors.
+ * Provides typed error codes for conditional handling and user messaging.
+ */
+export class CopilotError extends Error {
+    constructor(
+        message: string,
+        public readonly code: 'CLI_NOT_FOUND' | 'AUTH_FAILED' | 'CONNECTION_ERROR' | 'SDK_ERROR' | 'SESSION_ERROR'
+    ) {
+        super(message);
+        this.name = 'CopilotError';
+        // Maintains proper stack trace for where error was thrown (V8 engines)
+        if (Error.captureStackTrace) {
+            Error.captureStackTrace(this, CopilotError);
+        }
+    }
+
+    /**
+     * Returns user-friendly message suitable for Notice display.
+     */
+    getUserMessage(): string {
+        switch (this.code) {
+            case 'CLI_NOT_FOUND':
+                return 'GitHub CLI not found. Install from https://cli.github.com';
+            case 'AUTH_FAILED':
+                return "GitHub authentication failed. Run 'gh auth login' in terminal";
+            case 'CONNECTION_ERROR':
+                return 'Unable to connect to Copilot. Check your internet connection';
+            case 'SDK_ERROR':
+                return 'Copilot SDK error. Try disabling and re-enabling in settings';
+            case 'SESSION_ERROR':
+                return 'Copilot session error. Please try again';
+            default:
+                return 'An unexpected Copilot error occurred';
+        }
+    }
+}
+
 // Zod validation for message structure
 const MessageSchema = z.object({
     role: z.enum(["system", "user", "assistant"]),
@@ -330,19 +368,37 @@ export async function copilot_sdk_streaming(
 ): Promise<CopilotStreamResult> {
     new Notice("Calling GitHub Copilot");
 
+    // Validate client is initialized
+    if (!client) {
+        throw new CopilotError("Copilot client not initialized. Enable in settings.", 'SDK_ERROR');
+    }
+
     // Validate conversation structure
     const validatedConversation = ConversationSchema.parse(conversation);
 
     const lastUserMessage = validatedConversation.filter(m => m.role === 'user').pop();
     if (!lastUserMessage) {
-        throw new Error("No user message found in conversation");
+        throw new CopilotError("No user message found in conversation", 'SDK_ERROR');
     }
 
-    const session = await client.createSession({
-        model: model,
-        streaming: true,
-        systemMessage: systemMessage ? { content: systemMessage } : undefined,
-    });
+    let session: CopilotSession;
+    try {
+        session = await client.createSession({
+            model: model,
+            streaming: true,
+            systemMessage: systemMessage ? { content: systemMessage } : undefined,
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Session creation failed';
+        
+        if (message.includes('auth') || message.includes('token')) {
+            throw new CopilotError(message, 'AUTH_FAILED');
+        } else if (message.includes('ENOENT') || message.includes('not found')) {
+            throw new CopilotError(message, 'CLI_NOT_FOUND');
+        } else {
+            throw new CopilotError(message, 'SDK_ERROR');
+        }
+    }
 
     const textQueue = new AsyncEventQueue<string>();
     const reasoningQueue = new AsyncEventQueue<string>();
@@ -380,12 +436,22 @@ export async function copilot_sdk_streaming(
                 break;
             
             case "session.error":
-                const errorMessage = event.data?.message || 'Unknown error';
-                const error = new Error(`Copilot streaming error: ${errorMessage}`);
-                textQueue.fail(error);
-                reasoningQueue.fail(error);
+                // Categorize and handle different error types
+                const errorMessage = event.data?.message || 'Unknown session error';
+                let copilotError: CopilotError;
+                
+                if (errorMessage.includes('auth') || errorMessage.includes('401') || errorMessage.includes('403')) {
+                    copilotError = new CopilotError(errorMessage, 'AUTH_FAILED');
+                } else if (errorMessage.includes('network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('timeout')) {
+                    copilotError = new CopilotError(errorMessage, 'CONNECTION_ERROR');
+                } else {
+                    copilotError = new CopilotError(errorMessage, 'SESSION_ERROR');
+                }
+                
+                textQueue.fail(copilotError);
+                reasoningQueue.fail(copilotError);
                 console.error("Copilot session error:", event.data);
-                new Notice(`Copilot error: ${errorMessage}`);
+                new Notice(copilotError.getUserMessage());
                 // Perform cleanup when error occurs
                 performCleanup().catch(e => console.warn("Error during cleanup after session error:", e));
                 break;
@@ -403,13 +469,23 @@ export async function copilot_sdk_streaming(
         // For now, sending last message as per current API understanding
         await session.send({ prompt: lastUserMessage.content });
     } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        let copilotError: CopilotError;
+        
+        if (message.includes('auth') || message.includes('token') || message.includes('401') || message.includes('403')) {
+            copilotError = new CopilotError(message, 'AUTH_FAILED');
+        } else if (message.includes('network') || message.includes('ECONNREFUSED') || message.includes('timeout')) {
+            copilotError = new CopilotError(message, 'CONNECTION_ERROR');
+        } else {
+            copilotError = new CopilotError(message, 'SESSION_ERROR');
+        }
+        
         // Fail the queues so consumers are not left hanging
-        textQueue.fail(error);
-        reasoningQueue.fail(error);
+        textQueue.fail(copilotError);
+        reasoningQueue.fail(copilotError);
         // Clean up the session to avoid resource leaks
         await performCleanup();
-        throw error;
+        throw copilotError;
     }
 
     return {
@@ -433,19 +509,37 @@ export async function copilot_sdk_completion(
 ): Promise<string> {
     new Notice("Calling GitHub Copilot");
 
+    // Validate client is initialized
+    if (!client) {
+        throw new CopilotError("Copilot client not initialized. Enable in settings.", 'SDK_ERROR');
+    }
+
     // Validate conversation structure
     const validatedConversation = ConversationSchema.parse(conversation);
 
     const lastUserMessage = validatedConversation.filter(m => m.role === 'user').pop();
     if (!lastUserMessage) {
-        throw new Error("No user message found in conversation");
+        throw new CopilotError("No user message found in conversation", 'SDK_ERROR');
     }
 
-    const session = await client.createSession({
-        model: model,
-        streaming: false,
-        systemMessage: systemMessage ? { content: systemMessage } : undefined,
-    });
+    let session: CopilotSession;
+    try {
+        session = await client.createSession({
+            model: model,
+            streaming: false,
+            systemMessage: systemMessage ? { content: systemMessage } : undefined,
+        });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Session creation failed';
+        
+        if (message.includes('auth') || message.includes('token')) {
+            throw new CopilotError(message, 'AUTH_FAILED');
+        } else if (message.includes('ENOENT') || message.includes('not found')) {
+            throw new CopilotError(message, 'CLI_NOT_FOUND');
+        } else {
+            throw new CopilotError(message, 'SDK_ERROR');
+        }
+    }
 
     try {
         // Send the full conversation history to maintain context
@@ -454,6 +548,16 @@ export async function copilot_sdk_completion(
         const response = await session.sendAndWait({ prompt: lastUserMessage.content });
         const content = response?.data?.content || "";
         return content;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        
+        if (message.includes('auth') || message.includes('token') || message.includes('401') || message.includes('403')) {
+            throw new CopilotError(message, 'AUTH_FAILED');
+        } else if (message.includes('network') || message.includes('ECONNREFUSED') || message.includes('timeout')) {
+            throw new CopilotError(message, 'CONNECTION_ERROR');
+        } else {
+            throw new CopilotError(message, 'SESSION_ERROR');
+        }
     } finally {
         try {
             await session.destroy();

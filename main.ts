@@ -53,6 +53,17 @@ import { createOpenRouter, OpenRouterProvider } from "@openrouter/ai-sdk-provide
 import { createOpenAICompatible, OpenAICompatibleProvider } from "@ai-sdk/openai-compatible";
 import { createXai, xai, XaiProvider } from "@ai-sdk/xai";
 import type { CopilotClient } from "@github/copilot-sdk";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
+
+export interface CopilotCLIStatus {
+    installed: boolean;
+    authenticated: boolean;
+    version?: string;
+    error?: string;
+}
 
 export const DEFAULT_SETTINGS: CaretPluginSettings = {
     caret_version: "0.2.80",
@@ -3692,26 +3703,81 @@ version: 1
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     }
 
+    /**
+     * Check if GitHub CLI is installed and has Copilot extension.
+     * Returns status object with installation details.
+     */
+    async checkCopilotCLI(): Promise<CopilotCLIStatus> {
+        try {
+            // Check for gh CLI - use custom path if provided
+            const ghPath = this.settings.github_copilot_cli_path || "gh";
+            
+            // Get version to verify gh is installed
+            const { stdout: versionOutput } = await execFileAsync(ghPath, ["--version"]);
+            const version = versionOutput.trim().split("\n")[0];
+            
+            // Check authentication status
+            try {
+                await execFileAsync(ghPath, ["auth", "status"]);
+                return { installed: true, authenticated: true, version };
+            } catch {
+                return { installed: true, authenticated: false, version, error: 'Not authenticated' };
+            }
+        } catch (error) {
+            return { 
+                installed: false, 
+                authenticated: false, 
+                error: error instanceof Error ? error.message : 'CLI not found' 
+            };
+        }
+    }
+
     private async initCopilotClient(): Promise<void> {
-        if (!this.settings.github_copilot_enabled) return;
+        if (!this.settings.github_copilot_enabled) {
+            return;
+        }
+
+        // Pre-flight CLI check
+        const cliStatus = await this.checkCopilotCLI();
         
+        if (!cliStatus.installed) {
+            new Notice("GitHub CLI not found. Install from https://cli.github.com to use Copilot.");
+            console.warn("Copilot disabled: GitHub CLI not installed");
+            return;
+        }
+        
+        if (!cliStatus.authenticated) {
+            new Notice("GitHub CLI not authenticated. Run 'gh auth login' in terminal.");
+            console.warn("Copilot disabled: GitHub CLI not authenticated");
+            return;
+        }
+
         try {
             const { CopilotClient } = await import("@github/copilot-sdk");
-            this.copilot_client = new CopilotClient({ autoRestart: true });
+            this.copilot_client = new CopilotClient({
+                autoRestart: true,
+            });
             await this.copilot_client.start();
-            console.log("Copilot client started successfully");
+            console.log(`Copilot client started successfully (CLI: ${cliStatus.version})`);
         } catch (error) {
-            if (error instanceof Error) {
-                if (error.message.includes("ENOENT") || error.message.includes("not found")) {
-                    new Notice("GitHub Copilot CLI not found. Install it to use Copilot provider.");
-                } else if (error.message.includes("timeout")) {
-                    new Notice("Copilot CLI took too long to start. Try restarting Obsidian.");
-                } else {
-                    new Notice("Copilot initialization failed. Check console for details.");
-                }
-            }
-            console.error("Copilot client initialization failed:", error);
             this.copilot_client = null;
+            
+            if (error instanceof Error) {
+                let userMessage: string;
+                
+                if (error.message.includes("ENOENT") || error.message.includes("not found")) {
+                    userMessage = "Copilot CLI executable not found. Reinstall GitHub CLI.";
+                } else if (error.message.includes("timeout")) {
+                    userMessage = "Copilot CLI startup timed out. Try restarting Obsidian.";
+                } else if (error.message.includes("auth") || error.message.includes("token")) {
+                    userMessage = "Copilot authentication failed. Run 'gh auth refresh' in terminal.";
+                } else {
+                    userMessage = "Copilot initialization failed. Check console for details.";
+                }
+                
+                new Notice(userMessage);
+                console.error("Copilot client initialization failed:", error);
+            }
         }
     }
 
