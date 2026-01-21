@@ -3663,7 +3663,7 @@ version: 1
         
         try {
             const { CopilotClient } = await import("@github/copilot-sdk");
-            this.copilot_client = new CopilotClient({ autoStart: true, autoRestart: true });
+            this.copilot_client = new CopilotClient({ autoRestart: true });
             await this.copilot_client.start();
             console.log("Copilot client started successfully");
         } catch (error) {
@@ -3684,7 +3684,8 @@ version: 1
     async restartCopilotClient(): Promise<void> {
         if (this.copilot_client) {
             try {
-                await this.copilot_client.stop();
+                const errors = await this.copilot_client.stop();
+                if (errors.length > 0) console.warn("Copilot cleanup warnings:", errors);
             } catch (error) {
                 console.error("Error stopping Copilot client:", error);
             }
